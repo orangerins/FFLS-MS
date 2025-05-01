@@ -1,12 +1,114 @@
+<?php
+ini_set('session.save_path', '/tmp');
+session_start();
+
+require_once 'db_connection.php';
+if (!$conn) {
+    die("Database connection failed: " . mysqli_connect_error());
+}
+if (!isset($_SESSION['admin_logged_in'])) {
+    header("Location: admin_login.php");
+    exit();
+}
+
+// Enable error reporting for debugging
+error_reporting(E_ALL);
+ini_set('display_errors', 1);
+
+if ($_SERVER['REQUEST_METHOD'] === 'POST') {
+    if (isset($_POST['add_item'])) {
+        // Secure input handling with prepared statements
+        $stmt = $conn->prepare("INSERT INTO inventory (item_name, category, quantity, price) VALUES (?, ?, ?, ?)");
+        $stmt->bind_param("ssid", 
+            $_POST['item_name'],
+            $_POST['category'],
+            $_POST['quantity'],
+            $_POST['price']
+        );
+        
+        if ($stmt->execute()) {
+            $_SESSION['message'] = "Item added successfully!";
+        } else {
+            $_SESSION['error'] = "Error adding item: " . $conn->error;
+        }
+        header("Location: admin-inventory.php");
+        exit();
+    }
+    elseif (isset($_POST['update_item'])) {
+        $stmt = $conn->prepare("UPDATE inventory SET item_name=?, category=?, quantity=?, price=? WHERE item_id=?");
+        $stmt->bind_param("ssidi",
+            $_POST['item_name'],
+            $_POST['category'],
+            $_POST['quantity'],
+            $_POST['price'],
+            $_POST['item_id']
+        );
+        
+        if ($stmt->execute()) {
+            $_SESSION['message'] = "Item updated successfully!";
+        } else {
+            $_SESSION['error'] = "Error updating item: " . $conn->error;
+        }
+        header("Location: admin-inventory.php");
+        exit();
+    }
+    elseif (isset($_POST['delete_item'])) {
+        $stmt = $conn->prepare("DELETE FROM inventory WHERE item_id=?");
+        $stmt->bind_param("i", $_POST['item_id']);
+        
+        if ($stmt->execute()) {
+            $_SESSION['message'] = "Item deleted successfully!";
+        } else {
+            $_SESSION['error'] = "Error deleting item: " . $conn->error;
+        }
+        header("Location: admin-inventory.php");
+        exit();
+    }
+}
+
+function getInventoryStatus($quantity, $min_stock_level = 5) {
+    if ($quantity == 0) return "Out of Stock";
+    elseif ($quantity < $min_stock_level) return "Low Stock";
+    return "In Stock";
+}
+
+function decreaseInventory($item_id, $quantity, $conn) {
+    $stmt = $conn->prepare("UPDATE inventory SET quantity = quantity - ? WHERE item_id = ?");
+    $stmt->bind_param("ii", $quantity, $item_id);
+    return $stmt->execute();
+}
+
+// Fetch inventory items
+$inventory_items = [];
+$sql = "SELECT * FROM inventory";
+
+if (isset($_GET['search'])) {
+    $search = "%" . $_GET['search'] . "%";
+    $sql = "SELECT * FROM inventory WHERE item_name LIKE ? OR category LIKE ?";
+    $stmt = $conn->prepare($sql);
+    $stmt->bind_param("ss", $search, $search);
+    $stmt->execute();
+    $result = $stmt->get_result();
+} else {
+    $result = $conn->query($sql);
+}
+
+if ($result && $result->num_rows > 0) {
+    while ($row = $result->fetch_assoc()) {
+        $row['status'] = getInventoryStatus($row['quantity'], $row['min_stock_level'] ?? 5);
+        $inventory_items[] = $row;
+    }
+}
+?>
+
 <!DOCTYPE html>
 <html lang="en">
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>FreshFold Laundry - Inventory</title>
-    <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.0/css/all.min.css">
+    <title>Inventory Management</title>
     <style>
-        * {
+    * {
             margin: 0;
             padding: 0;
             box-sizing: border-box;
@@ -287,433 +389,40 @@
     </style>
 </head>
 <body>
-    <header>
-        <div class="logo-menu">
-            <img src="FFLSlogo.png" alt="Logo" style="height: 40px;">
-            <button id="menu-btn">
-                <img src="m-icon.png" alt="Menu">
-            </button>
-        </div>
-        <div class="user-profile" id="logout-btn">
-            <span>Admin</span>
-            <i class="fas fa-user-circle" id="profile-icon"></i>
-            <div class="logout-box" id="logout-box">
-                <a href="login.html">Logout</a>
-            </div>
-        </div>
-    </header>
-
-    <div class="sidebar" id="sidebar">
-        <ul>
-          <li><a href="admin-dashboard.html"><img src="d-icon.png"></i> Dashboard</a></li>
-          <li class="active-menu"><a href="admin-orders.html"><img src="O-icon.png"><i class="Orders"></i> Orders</a></li>
-          <li><a href="admin-customers.html"><img src="c-icon.png"></i> Customers</a></li>
-          <li><a href="admin-inventory.html"><img src="i-icon.png"></i> Inventory</a></li>
-          <li><a href="admin-Paymentsss.html"><img src="p-icon.png"></i> Payments</a></li>
-          <li><a href="admin-reports.html"><img src="rp-icon.png"></i> Reports</a></li>
-        </ul>
-      </div>
-
+    <!-- Your existing HTML structure -->
     <div class="content" id="mainContent">
         <h1>Inventory</h1>
-        <div class="search-bar">
-            <input type="text" id="search-input" placeholder="Search by item name or category" oninput="filterItems()">
-            <button class="btn btn-primary" style="margin-left: 10px;" onclick="openAddItemModal()">
-                <i class="fas fa-plus"></i> Add Item
-            </button>
-        </div>
-
-        <table id="inventory-table">
-            <thead>
-                <tr>
-                    <th>Item ID</th>
-                    <th>Item Name</th>
-                    <th>Category</th>
-                    <th>Quantity</th>
-                    <th>Price</th>
-                    <th>Status</th>
-                    <th>Action</th>
-                </tr>
-            </thead>
-            <tbody>
-                <tr>
-                    <td>001</td>
-                    <td>Laundry Detergent</td>
-                    <td>Cleaning Supplies</td>
-                    <td>24</td>
-                    <td>₱120.00</td>
-                    <td><span class="status-in-stock">In Stock</span></td>
-                    <td>
-                        <span class="action-link" onclick="viewItem(1)">View</span>
-                        <span class="action-link" onclick="editItem(1)">Edit</span>
-                        <span class="action-link delete" onclick="confirmDeleteItem(1)">Delete</span>
-                    </td>
-                </tr>
-                <tr>
-                    <td>002</td>
-                    <td>Fabric Softener</td>
-                    <td>Cleaning Supplies</td>
-                    <td>15</td>
-                    <td>₱85.00</td>
-                    <td><span class="status-in-stock">In Stock</span></td>
-                    <td>
-                        <span class="action-link" onclick="viewItem(2)">View</span>
-                        <span class="action-link" onclick="editItem(2)">Edit</span>
-                        <span class="action-link delete" onclick="confirmDeleteItem(2)">Delete</span>
-                    </td>
-                </tr>
-                <tr>
-                    <td>003</td>
-                    <td>Plastic Bags (Large)</td>
-                    <td>Packaging</td>
-                    <td>3</td>
-                    <td>₱45.00</td>
-                    <td><span class="status-low-stock">Low Stock</span></td>
-                    <td>
-                        <span class="action-link" onclick="viewItem(3)">View</span>
-                        <span class="action-link" onclick="editItem(3)">Edit</span>
-                        <span class="action-link delete" onclick="confirmDeleteItem(3)">Delete</span>
-                    </td>
-                </tr>
-                <tr>
-                    <td>004</td>
-                    <td>Stain Remover</td>
-                    <td>Cleaning Supplies</td>
-                    <td>0</td>
-                    <td>₱95.00</td>
-                    <td><span class="status-out-of-stock">Out of Stock</span></td>
-                    <td>
-                        <span class="action-link" onclick="viewItem(4)">View</span>
-                        <span class="action-link" onclick="editItem(4)">Edit</span>
-                        <span class="action-link delete" onclick="confirmDeleteItem(4)">Delete</span>
-                    </td>
-                </tr>
-            </tbody>
-        </table>
-
-        <div id="add-item-modal" class="modal">
-            <div class="modal-content">
-                <h2>Add New Item</h2>
-                <form id="add-item-form">
-                    <div class="form-group">
-                        <label for="item-name">Item Name</label>
-                        <input type="text" id="item-name" required>
-                    </div>
-                    <div class="form-group">
-                        <label for="item-category">Category</label>
-                        <select id="item-category" required>
-                            <option value="">Select Category</option>
-                            <option value="Cleaning Supplies">Cleaning Supplies</option>
-                            <option value="Packaging">Packaging</option>
-                            <option value="Equipment">Equipment</option>
-                            <option value="Other">Other</option>
-                        </select>
-                    </div>
-                    <div class="form-group">
-                        <label for="item-quantity">Quantity</label>
-                        <input type="number" id="item-quantity" required>
-                    </div>
-                    <div class="form-group">
-                        <label for="item-price">Price (₱)</label>
-                        <input type="number" id="item-price" step="0.01" required>
-                    </div>
-                    <div class="modal-actions">
-                        <button type="button" class="btn btn-secondary" onclick="closeModal('add-item-modal')">Cancel</button>
-                        <button type="submit" class="btn btn-primary">Add Item</button>
-                    </div>
-                </form>
-            </div>
-        </div>
         
-        <div id="view-item-modal" class="modal">
-            <div class="modal-content">
-                <h2>Item Details</h2>
-                <div class="form-group">
-                    <label>Item ID</label>
-                    <p id="view-item-id"></p>
-                </div>
-                <div class="form-group">
-                    <label>Item Name</label>
-                    <p id="view-item-name"></p>
-                </div>
-                <div class="form-group">
-                    <label>Category</label>
-                    <p id="view-item-category"></p>
-                </div>
-                <div class="form-group">
-                    <label>Quantity</label>
-                    <p id="view-item-quantity"></p>
-                </div>
-                <div class="form-group">
-                    <label>Price</label>
-                    <p id="view-item-price"></p>
-                </div>
-                <div class="form-group">
-                    <label>Status</label>
-                    <p id="view-item-status"></p>
-                </div>
-                <div class="modal-actions">
-                    <button class="btn btn-primary" onclick="closeModal('view-item-modal')">Close</button>
-                </div>
-            </div>
-        </div>
+        <?php if (isset($_SESSION['message'])): ?>
+            <div class="alert alert-success"><?= htmlspecialchars($_SESSION['message']) ?></div>
+            <?php unset($_SESSION['message']); ?>
+        <?php endif; ?>
         
-        <div id="edit-item-modal" class="modal">
-            <div class="modal-content">
-                <h2>Edit Item</h2>
-                <form id="edit-item-form">
-                    <input type="hidden" id="edit-item-id">
-                    <div class="form-group">
-                        <label for="edit-item-name">Item Name</label>
-                        <input type="text" id="edit-item-name" required>
-                    </div>
-                    <div class="form-group">
-                        <label for="edit-item-category">Category</label>
-                        <select id="edit-item-category" required>
-                            <option value="Cleaning Supplies">Cleaning Supplies</option>
-                            <option value="Packaging">Packaging</option>
-                            <option value="Equipment">Equipment</option>
-                            <option value="Other">Other</option>
-                        </select>
-                    </div>
-                    <div class="form-group">
-                        <label for="edit-item-quantity">Quantity</label>
-                        <input type="number" id="edit-item-quantity" required>
-                    </div>
-                    <div class="form-group">
-                        <label for="edit-item-price">Price (₱)</label>
-                        <input type="number" id="edit-item-price" step="0.01" required>
-                    </div>
-                    <div class="modal-actions">
-                        <button type="button" class="btn btn-secondary" onclick="closeModal('edit-item-modal')">Cancel</button>
-                        <button type="submit" class="btn btn-primary">Save Changes</button>
-                    </div>
-                </form>
-            </div>
-        </div>
+        <?php if (isset($_SESSION['error'])): ?>
+            <div class="alert alert-danger"><?= htmlspecialchars($_SESSION['error']) ?></div>
+            <?php unset($_SESSION['error']); ?>
+        <?php endif; ?>
         
-        <div id="delete-item-modal" class="modal">
-            <div class="modal-content">
-                <h2>Confirm Delete</h2>
-                <p>Are you sure you want to delete item <span id="delete-item-name"></span>?</p>
-                <div class="modal-actions">
-                    <button type="button" class="btn btn-secondary" onclick="closeModal('delete-item-modal')">Cancel</button>
-                    <button type="button" class="btn btn-danger" onclick="deleteItem()">Delete</button>
-                </div>
-            </div>
-        </div>
-        
-        <script>
-            const inventoryItems = [
-                {
-                    id: 1,
-                    name: "Laundry Detergent",
-                    category: "Cleaning Supplies",
-                    quantity: 24,
-                    price: 120.00,
-                    status: "In Stock"
-                },
-                {
-                    id: 2,
-                    name: "Fabric Softener",
-                    category: "Cleaning Supplies",
-                    quantity: 15,
-                    price: 85.00,
-                    status: "In Stock"
-                },
-                {
-                    id: 3,
-                    name: "Plastic Bags (Large)",
-                    category: "Packaging",
-                    quantity: 3,
-                    price: 45.00,
-                    status: "Low Stock"
-                },
-                {
-                    id: 4,
-                    name: "Stain Remover",
-                    category: "Cleaning Supplies",
-                    quantity: 0,
-                    price: 95.00,
-                    status: "Out of Stock"
-                }
-            ];
-        
-            let itemToDelete = null;
-        
-            document.getElementById('menu-btn').addEventListener('click', function() {
-                document.getElementById('sidebar').classList.toggle('active');
-                document.getElementById('mainContent').classList.toggle('shift');
-            });
-        
-            document.getElementById('logout-btn').addEventListener('click', function() {
-                document.getElementById('logout-box').style.display = 
-                    document.getElementById('logout-box').style.display === 'block' ? 'none' : 'block';
-            });
-        
-            function openAddItemModal() {
-                document.getElementById('add-item-modal').style.display = 'flex';
-            }
-        
-            function viewItem(id) {
-                const item = inventoryItems.find(i => i.id === id);
-                document.getElementById('view-item-id').textContent = item.id.toString().padStart(3, '0');
-                document.getElementById('view-item-name').textContent = item.name;
-                document.getElementById('view-item-category').textContent = item.category;
-                document.getElementById('view-item-quantity').textContent = item.quantity;
-                document.getElementById('view-item-price').textContent = `₱${item.price.toFixed(2)}`;
-                document.getElementById('view-item-status').innerHTML = `<span class="status-${item.status.toLowerCase().replace(' ', '-')}">${item.status}</span>`;
-                document.getElementById('view-item-modal').style.display = 'flex';
-            }
-        
-            function editItem(id) {
-                const item = inventoryItems.find(i => i.id === id);
-                document.getElementById('edit-item-id').value = item.id;
-                document.getElementById('edit-item-name').value = item.name;
-                document.getElementById('edit-item-category').value = item.category;
-                document.getElementById('edit-item-quantity').value = item.quantity;
-                document.getElementById('edit-item-price').value = item.price;
-                document.getElementById('edit-item-modal').style.display = 'flex';
-            }
-        
-            function confirmDeleteItem(id) {
-                const item = inventoryItems.find(i => i.id === id);
-                itemToDelete = id;
-                document.getElementById('delete-item-name').textContent = item.name;
-                document.getElementById('delete-item-modal').style.display = 'flex';
-            }
-        
-            function deleteItem() {
-                if (itemToDelete) {
-                    const rows = document.querySelectorAll('tbody tr');
-                    rows.forEach(row => {
-                        if (row.cells[0].textContent === itemToDelete.toString().padStart(3, '0')) {
-                            row.remove();
-                        }
-                    });
-                    
-                    const index = inventoryItems.findIndex(item => item.id === itemToDelete);
-                    if (index !== -1) {
-                        inventoryItems.splice(index, 1);
-                    }
-                    
-                    alert(`Item ${itemToDelete} deleted successfully!`);
-                    closeModal('delete-item-modal');
-                    itemToDelete = null;
-                }
-            }
-        
-            document.getElementById('add-item-form').addEventListener('submit', function(e) {
-                e.preventDefault();
-                
-                const newItem = {
-                    id: inventoryItems.length > 0 ? Math.max(...inventoryItems.map(i => i.id)) + 1 : 1,
-                    name: document.getElementById('item-name').value,
-                    category: document.getElementById('item-category').value,
-                    quantity: parseInt(document.getElementById('item-quantity').value),
-                    price: parseFloat(document.getElementById('item-price').value),
-                    status: "In Stock"
-                };
-                
-                if (newItem.quantity === 0) {
-                    newItem.status = "Out of Stock";
-                } else if (newItem.quantity < 5) {
-                    newItem.status = "Low Stock";
-                }
-                
-                inventoryItems.push(newItem);
-                addItemToTable(newItem);
-                
-                alert('New item added successfully!');
-                closeModal('add-item-modal');
-                this.reset();
-            });
-        
-            document.getElementById('edit-item-form').addEventListener('submit', function(e) {
-                e.preventDefault();
-                
-                const id = parseInt(document.getElementById('edit-item-id').value);
-                const itemIndex = inventoryItems.findIndex(item => item.id === id);
-                
-                if (itemIndex !== -1) {
-                    inventoryItems[itemIndex].name = document.getElementById('edit-item-name').value;
-                    inventoryItems[itemIndex].category = document.getElementById('edit-item-category').value;
-                    inventoryItems[itemIndex].quantity = parseInt(document.getElementById('edit-item-quantity').value);
-                    inventoryItems[itemIndex].price = parseFloat(document.getElementById('edit-item-price').value);
-                    
-                    if (inventoryItems[itemIndex].quantity === 0) {
-                        inventoryItems[itemIndex].status = "Out of Stock";
-                    } else if (inventoryItems[itemIndex].quantity < 5) {
-                        inventoryItems[itemIndex].status = "Low Stock";
-                    } else {
-                        inventoryItems[itemIndex].status = "In Stock";
-                    }
-                }
-                
-                const rows = document.querySelectorAll('tbody tr');
-                rows.forEach(row => {
-                    if (row.cells[0].textContent === id.toString().padStart(3, '0')) {
-                        row.cells[1].textContent = document.getElementById('edit-item-name').value;
-                        row.cells[2].textContent = document.getElementById('edit-item-category').value;
-                        row.cells[3].textContent = document.getElementById('edit-item-quantity').value;
-                        row.cells[4].textContent = `₱${parseFloat(document.getElementById('edit-item-price').value).toFixed(2)}`;
-                        
-                        const quantity = parseInt(document.getElementById('edit-item-quantity').value);
-                        let status = "In Stock";
-                        if (quantity === 0) {
-                            status = "Out of Stock";
-                        } else if (quantity < 5) {
-                            status = "Low Stock";
-                        }
-                        row.cells[5].innerHTML = `<span class="status-${status.toLowerCase().replace(' ', '-')}">${status}</span>`;
-                    }
-                });
-                
-                alert('Item updated successfully!');
-                closeModal('edit-item-modal');
-            });
-
-            function closeModal(modalId) {
-                document.getElementById(modalId).style.display = 'none';
-            }
-
-            function filterItems() {
-                const searchInput = document.getElementById('search-input').value.toLowerCase();
-                const rows = document.querySelectorAll('#inventory-table tbody tr');
-
-                rows.forEach(row => {
-                    const itemName = row.cells[1].textContent.toLowerCase();
-                    const itemCategory = row.cells[2].textContent.toLowerCase();
-                    if (itemName.includes(searchInput) || itemCategory.includes(searchInput)) {
-                        row.style.display = '';
-                    } else {
-                        row.style.display = 'none';
-                    }
-                });
-            }
-
-            function addItemToTable(item) {
-                const tableBody = document.querySelector('#inventory-table tbody');
-                const newRow = document.createElement('tr');
-                
-                newRow.innerHTML = `
-                    <td>${item.id.toString().padStart(3, '0')}</td>
-                    <td>${item.name}</td>
-                    <td>${item.category}</td>
-                    <td>${item.quantity}</td>
-                    <td>₱${item.price.toFixed(2)}</td>
-                    <td><span class="status-${item.status.toLowerCase().replace(' ', '-')}">${item.status}</span></td>
-                    <td>
-                        <span class="action-link" onclick="viewItem(${item.id})">View</span>
-                        <span class="action-link" onclick="editItem(${item.id})">Edit</span>
-                        <span class="action-link delete" onclick="confirmDeleteItem(${item.id})">Delete</span>
-                    </td>
-                `;
-                
-                tableBody.appendChild(newRow);
-            }
-        </script>
+        <!-- Rest of your HTML/PHP mix -->
     </div>
-</div>
+    <script>
+        // Your existing JavaScript
+        function decreaseInventoryOnOrder(itemId, quantity) {
+            fetch('process_order.php', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ item_id: itemId, quantity: quantity })
+            })
+            .then(response => response.json())
+            .then(data => {
+                if (data.success) {
+                    alert("Inventory updated!");
+                    location.reload();
+                } else {
+                    alert("Error: " + data.error);
+                }
+            });
+        }
+    </script>
 </body>
 </html>
