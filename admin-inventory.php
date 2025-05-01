@@ -11,13 +11,11 @@ if (!isset($_SESSION['admin_logged_in'])) {
     exit();
 }
 
-// Enable error reporting for debugging
 error_reporting(E_ALL);
 ini_set('display_errors', 1);
 
 if ($_SERVER['REQUEST_METHOD'] === 'POST') {
     if (isset($_POST['add_item'])) {
-        // Secure input handling with prepared statements
         $stmt = $conn->prepare("INSERT INTO inventory (item_name, category, quantity, price) VALUES (?, ?, ?, ?)");
         $stmt->bind_param("ssid", 
             $_POST['item_name'],
@@ -64,6 +62,18 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
         header("Location: admin-inventory.php");
         exit();
     }
+    elseif (isset($_POST['decrease_item'])) {
+        $item_id = $_POST['item_id'];
+        $quantity = $_POST['quantity'];
+        
+        if (decreaseInventory($item_id, $quantity, $conn)) {
+            $_SESSION['message'] = "Inventory decreased successfully!";
+        } else {
+            $_SESSION['error'] = "Error decreasing inventory";
+        }
+        header("Location: admin-inventory.php");
+        exit();
+    }
 }
 
 function getInventoryStatus($quantity, $min_stock_level = 5) {
@@ -78,7 +88,6 @@ function decreaseInventory($item_id, $quantity, $conn) {
     return $stmt->execute();
 }
 
-// Fetch inventory items
 $inventory_items = [];
 $sql = "SELECT * FROM inventory";
 
@@ -108,7 +117,7 @@ if ($result && $result->num_rows > 0) {
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>Inventory Management</title>
     <style>
-    * {
+            * {
             margin: 0;
             padding: 0;
             box-sizing: border-box;
@@ -389,7 +398,6 @@ if ($result && $result->num_rows > 0) {
     </style>
 </head>
 <body>
-    <!-- Your existing HTML structure -->
     <div class="content" id="mainContent">
         <h1>Inventory</h1>
         
@@ -403,26 +411,40 @@ if ($result && $result->num_rows > 0) {
             <?php unset($_SESSION['error']); ?>
         <?php endif; ?>
         
-        <!-- Rest of your HTML/PHP mix -->
+        <table>
+            <thead>
+                <tr>
+                    <th>Item ID</th>
+                    <th>Item Name</th>
+                    <th>Category</th>
+                    <th>Quantity</th>
+                    <th>Price</th>
+                    <th>Status</th>
+                    <th>Actions</th>
+                </tr>
+            </thead>
+            <tbody>
+                <?php foreach ($inventory_items as $item): ?>
+                    <tr>
+                        <td><?= $item['item_id'] ?></td>
+                        <td><?= htmlspecialchars($item['item_name']) ?></td>
+                        <td><?= htmlspecialchars($item['category']) ?></td>
+                        <td><?= $item['quantity'] ?></td>
+                        <td>$<?= number_format($item['price'], 2) ?></td>
+                        <td class="status-<?= strtolower(str_replace(' ', '-', $item['status'])) ?>">
+                            <?= $item['status'] ?>
+                        </td>
+                        <td>
+                            <form class="decrease-form" method="POST" action="admin-inventory.php">
+                                <input type="hidden" name="item_id" value="<?= $item['item_id'] ?>">
+                                <input type="number" class="decrease-input" name="quantity" value="1" min="1" max="<?= $item['quantity'] ?>">
+                                <button type="submit" name="decrease_item">Decrease</button>
+                            </form>
+                        </td>
+                    </tr>
+                <?php endforeach; ?>
+            </tbody>
+        </table>
     </div>
-    <script>
-        // Your existing JavaScript
-        function decreaseInventoryOnOrder(itemId, quantity) {
-            fetch('process_order.php', {
-                method: 'POST',
-                headers: { 'Content-Type': 'application/json' },
-                body: JSON.stringify({ item_id: itemId, quantity: quantity })
-            })
-            .then(response => response.json())
-            .then(data => {
-                if (data.success) {
-                    alert("Inventory updated!");
-                    location.reload();
-                } else {
-                    alert("Error: " + data.error);
-                }
-            });
-        }
-    </script>
 </body>
 </html>
