@@ -1,112 +1,235 @@
 <?php
-ini_set('session.save_path', '/tmp');
 session_start();
+include 'db_connection.php';
 
-require_once 'db_connection.php';
-if (!$conn) {
-    die("Database connection failed: " . mysqli_connect_error());
-}
 if (!isset($_SESSION['admin_logged_in'])) {
     header("Location: admin_login.php");
     exit();
 }
 
-error_reporting(E_ALL);
-ini_set('display_errors', 1);
+if (empty($_SESSION['csrf_token'])) {
+    $_SESSION['csrf_token'] = bin2hex(random_bytes(32));
+}
+
+if ($_SERVER['REQUEST_METHOD'] === 'GET' && !isset($_SERVER['HTTP_X_REQUESTED_WITH'])) {
+    ?>
+    <!DOCTYPE html>
+    <html lang="en">
+    <head>
+        <title>Admin Inventory</title>
+        </head>
+    <body>
+        <script>
+            const initialCsrfToken = "<?php echo $_SESSION['csrf_token']; ?>";
+        </script>
+    </body>
+    </html>
+    <?php
+    exit();
+}
 
 if ($_SERVER['REQUEST_METHOD'] === 'POST') {
+    if (!isset($_POST['csrf_token']) || $_POST['csrf_token'] !== $_SESSION['csrf_token']) {
+        error_log("CSRF token validation failed for admin-inventory.php", 0);
+        header('Content-Type: application/json');
+        echo json_encode(['status' => 'error', 'errors' => ["CSRF token validation failed"]]);
+        exit;
+    }
+    unset($_SESSION['csrf_token']);
+    $_SESSION['csrf_token'] = bin2hex(random_bytes(32));
+
     if (isset($_POST['add_item'])) {
+        $itemName = isset($_POST['item_name']) ? trim($_POST['item_name']) : '';
+        $category = isset($_POST['category']) ? trim($_POST['category']) : '';
+        $quantity = isset($_POST['quantity']) ? intval($_POST['quantity']) : 0;
+        $price = isset($_POST['price']) ? floatval($_POST['price']) : 0.00;
+
+        $errors = [];
+        if (strlen($itemName) < 2 || strlen($itemName) > 255) {
+            $errors[] = "Item Name must be between 2 and 255 characters.";
+        }
+        if (strlen($category) > 1000) {
+            $errors[] = "Category cannot exceed 1000 characters.";
+        }
+        if ($quantity < 0) {
+            $errors[] = "Quantity must be a non-negative number.";
+        }
+        if ($price < 0) {
+            $errors[] = "Price must be a non-negative number.";
+        }
+
+        $allowedCategories = ["Cleaning Supplies", "Packaging", "Equipment", "Other"];
+        if (!in_array($category, $allowedCategories)) {
+            $errors[] = "Invalid category selected.";
+        }
+
+        if (!empty($errors)) {
+            header('Content-Type: application/json');
+            echo json_encode(['status' => 'error', 'errors' => $errors]);
+            exit;
+        }
+
         $stmt = $conn->prepare("INSERT INTO inventory (item_name, category, quantity, price) VALUES (?, ?, ?, ?)");
-        $stmt->bind_param("ssid", 
-            $_POST['item_name'],
-            $_POST['category'],
-            $_POST['quantity'],
-            $_POST['price']
-        );
-        
-        if ($stmt->execute()) {
-            $_SESSION['message'] = "Item added successfully!";
+        if ($stmt) {
+            $stmt->bind_param("ssii", $itemName, $category, $quantity, $price);
+            if ($stmt->execute()) {
+                header('Content-Type: application/json');
+                echo json_encode(['status' => 'success', 'message' => 'Item added successfully!']);
+            } else {
+                error_log("Database error (add_item): " . $stmt->error, 0);
+                header('Content-Type: application/json');
+                echo json_encode(['status' => 'error', 'errors' => ["Error adding item: " . $stmt->error]]);
+            }
+            $stmt->close();
         } else {
-            $_SESSION['error'] = "Error adding item: " . $conn->error;
+            error_log("Database error (prepare add_item): " . $conn->error, 0);
+            header('Content-Type: application/json');
+            echo json_encode(['status' => 'error', 'errors' => ["Database error"]]);
         }
-        header("Location: admin-inventory.php");
-        exit();
-    }
-    elseif (isset($_POST['update_item'])) {
+
+    } elseif (isset($_POST['update_item'])) {
+        $itemId = isset($_POST['item_id']) ? intval($_POST['item_id']) : 0;
+        $itemName = isset($_POST['item_name']) ? trim($_POST['item_name']) : '';
+        $category = isset($_POST['category']) ? trim($_POST['category']) : '';
+        $quantity = isset($_POST['quantity']) ? intval($_POST['quantity']) : 0;
+        $price = isset($_POST['price']) ? floatval($_POST['price']) : 0.00;
+
+        $errors = [];
+        if ($itemId <= 0) {
+            $errors[] = "Invalid Item ID.";
+        }
+        if (strlen($itemName) < 2 || strlen($itemName) > 255) {
+            $errors[] = "Item Name must be between 2 and 255 characters.";
+        }
+        if (strlen($category) > 1000) {
+            $errors[] = "Category cannot exceed 1000 characters.";
+        }
+        if ($quantity < 0) {
+            $errors[] = "Quantity must be a non-negative number.";
+        }
+        if ($price < 0) {
+            $errors[] = "Price must be a non-negative number.";
+        }
+
+        $allowedCategories = ["Cleaning Supplies", "Packaging", "Equipment", "Other"];
+        if (!in_array($category, $allowedCategories)) {
+            $errors[] = "Invalid category selected.";
+        }
+
+        if (!empty($errors)) {
+            header('Content-Type: application/json');
+            echo json_encode(['status' => 'error', 'errors' => $errors]);
+            exit;
+        }
+
         $stmt = $conn->prepare("UPDATE inventory SET item_name=?, category=?, quantity=?, price=? WHERE item_id=?");
-        $stmt->bind_param("ssidi",
-            $_POST['item_name'],
-            $_POST['category'],
-            $_POST['quantity'],
-            $_POST['price'],
-            $_POST['item_id']
-        );
-        
-        if ($stmt->execute()) {
-            $_SESSION['message'] = "Item updated successfully!";
+        if ($stmt) {
+            $stmt->bind_param("ssidi", $itemName, $category, $quantity, $price, $itemId);
+            if ($stmt->execute()) {
+                header('Content-Type: application/json');
+                echo json_encode(['status' => 'success', 'message' => 'Item updated successfully!']);
+            } else {
+                error_log("Database error (update_item): " . $stmt->error, 0);
+                header('Content-Type: application/json');
+                echo json_encode(['status' => 'error', 'errors' => ["Error updating item: " . $stmt->error]]);
+            }
+            $stmt->close();
         } else {
-            $_SESSION['error'] = "Error updating item: " . $conn->error;
+            error_log("Database error (prepare update_item): " . $conn->error, 0);
+            header('Content-Type: application/json');
+            echo json_encode(['status' => 'error', 'errors' => ["Database error"]]);
         }
-        header("Location: admin-inventory.php");
-        exit();
-    }
-    elseif (isset($_POST['delete_item'])) {
+
+    } elseif (isset($_POST['delete_item'])) {
+        $itemId = isset($_POST['item_id']) ? intval($_POST['item_id']) : 0;
+
+        $errors = [];
+        if ($itemId <= 0) {
+            $errors[] = "Invalid Item ID.";
+        }
+
+        if (!empty($errors)) {
+            header('Content-Type: application/json');
+            echo json_encode(['status' => 'error', 'errors' => $errors]);
+            exit;
+        }
+
         $stmt = $conn->prepare("DELETE FROM inventory WHERE item_id=?");
-        $stmt->bind_param("i", $_POST['item_id']);
-        
-        if ($stmt->execute()) {
-            $_SESSION['message'] = "Item deleted successfully!";
+        if ($stmt) {
+            $stmt->bind_param("i", $itemId);
+            if ($stmt->execute()) {
+                header('Content-Type: application/json');
+                echo json_encode(['status' => 'success', 'message' => 'Item deleted successfully!']);
+            } else {
+                error_log("Database error (delete_item): " . $stmt->error, 0);
+                header('Content-Type: application/json');
+                echo json_encode(['status' => 'error', 'errors' => ["Error deleting item: " . $stmt->error]]);
+            }
+            $stmt->close();
         } else {
-            $_SESSION['error'] = "Error deleting item: " . $conn->error;
+            error_log("Database error (prepare delete_item): " . $conn->error, 0);
+            header('Content-Type: application/json');
+            echo json_encode(['status' => 'error', 'errors' => ["Database error"]]);
         }
-        header("Location: admin-inventory.php");
-        exit();
-    }
-    elseif (isset($_POST['decrease_item'])) {
-        $item_id = $_POST['item_id'];
-        $quantity = $_POST['quantity'];
-        
-        if (decreaseInventory($item_id, $quantity, $conn)) {
-            $_SESSION['message'] = "Inventory decreased successfully!";
+
+    } elseif (isset($_POST['decrease_item'])) {
+        $itemId = isset($_POST['item_id']) ? intval($_POST['item_id']) : 0;
+        $decreaseQuantity = isset($_POST['quantity']) ? intval($_POST['quantity']) : 0;
+
+        $errors = [];
+        if ($itemId <= 0 || $decreaseQuantity <= 0) {
+            $errors[] = "Invalid input.";
+        }
+
+        if (!empty($errors)) {
+            header('Content-Type: application/json');
+            echo json_encode(['status' => 'error', 'errors' => $errors]);
+            exit;
+        }
+
+        $stmt = $conn->prepare("UPDATE inventory SET quantity = GREATEST(0, quantity - ?) WHERE item_id = ?");
+        if ($stmt) {
+            $stmt->bind_param("ii", $decreaseQuantity, $itemId);
+            if ($stmt->execute()) {
+                header('Content-Type: application/json');
+                echo json_encode(['status' => 'success', 'message' => 'Quantity decreased.']);
+            } else {
+                error_log("Database error (decrease): " . $stmt->error, 0);
+                header('Content-Type: application/json');
+                echo json_encode(['status' => 'error', 'errors' => ["Error decreasing quantity."]]);
+            }
+            $stmt->close();
         } else {
-            $_SESSION['error'] = "Error decreasing inventory";
+            error_log("Database error (prepare decrease): " . $conn->error, 0);
+            header('Content-Type: application/json');
+            echo json_encode(['status' => 'error', 'errors' => ["Database error"]]);
         }
-        header("Location: admin-inventory.php");
-        exit();
     }
 }
 
-function getInventoryStatus($quantity, $min_stock_level = 5) {
-    if ($quantity == 0) return "Out of Stock";
-    elseif ($quantity < $min_stock_level) return "Low Stock";
-    return "In Stock";
-}
-
-function decreaseInventory($item_id, $quantity, $conn) {
-    $stmt = $conn->prepare("UPDATE inventory SET quantity = quantity - ? WHERE item_id = ?");
-    $stmt->bind_param("ii", $quantity, $item_id);
-    return $stmt->execute();
-}
-
-$inventory_items = [];
 $sql = "SELECT * FROM inventory";
-
-if (isset($_GET['search'])) {
-    $search = "%" . $_GET['search'] . "%";
-    $sql = "SELECT * FROM inventory WHERE item_name LIKE ? OR category LIKE ?";
-    $stmt = $conn->prepare($sql);
-    $stmt->bind_param("ss", $search, $search);
-    $stmt->execute();
-    $result = $stmt->get_result();
-} else {
-    $result = $conn->query($sql);
+$result = $conn->query($sql);
+$inventory_items = [];
+if ($result->num_rows > 0) {
+    while ($row = $result->fetch_assoc()) {
+        $item = [
+            'item_id' => intval($row['item_id']),
+            'item_name' => htmlspecialchars($row['item_name'], ENT_QUOTES, 'UTF-8'),
+            'category' => htmlspecialchars($row['category'], ENT_QUOTES, 'UTF-8'),
+            'quantity' => intval($row['quantity']),
+            'price' => floatval($row['price']),
+            'status' => getStatusText(intval($row['quantity']))
+        ];
+        $inventory_items[] = $item;
+    }
 }
 
-if ($result && $result->num_rows > 0) {
-    while ($row = $result->fetch_assoc()) {
-        $row['status'] = getInventoryStatus($row['quantity'], $row['min_stock_level'] ?? 5);
-        $inventory_items[] = $row;
-    }
+$conn->close();
+
+function getStatusText($quantity) {
+    if ($quantity == 0) return "Out of Stock";
+    if ($quantity < 10) return "Low Stock";
+    return "In Stock";
 }
 ?>
 
