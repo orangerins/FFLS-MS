@@ -1,56 +1,15 @@
 <?php
 include 'db_connection.php';
 
-// Handle subtracting quantity
-if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['subtract_item'])) {
-    $itemId = intval($_POST['item_id']);
-    $quantityToSubtract = intval($_POST['quantity_to_subtract']);
-
-    if ($itemId > 0 && $quantityToSubtract > 0) {
-        // Get the current quantity
-        $getCurrentQuantitySql = "SELECT quantity FROM inventory WHERE item_id = ?";
-        $getCurrentQuantityStmt = $conn->prepare($getCurrentQuantitySql);
-        $getCurrentQuantityStmt->bind_param("i", $itemId);
-        $getCurrentQuantityStmt->execute();
-        $getCurrentQuantityResult = $getCurrentQuantityStmt->get_result();
-
-        if ($getCurrentQuantityResult && $getCurrentQuantityResult->num_rows > 0) {
-            $currentQuantity = $getCurrentQuantityResult->fetch_assoc()['quantity'];
-            $getCurrentQuantityStmt->close();
-
-            $newQuantity = $currentQuantity - $quantityToSubtract;
-
-            if ($newQuantity >= 0) {
-                $status = ($newQuantity > 10) ? 'In Stock' : (($newQuantity > 0) ? 'Low Stock' : 'Out of Stock');
-
-                $sql = "UPDATE inventory SET quantity = ?, status = ? WHERE item_id = ?";
-                $stmt = $conn->prepare($sql);
-                $stmt->bind_param("isi", $newQuantity, $status, $itemId);
-
-                if ($stmt->execute()) {
-                    echo "success"; // Inventory updated successfully
-                } else {
-                    echo "error: " . $stmt->error;
-                }
-                $stmt->close();
-            } else {
-                echo "error: Cannot subtract more than the current stock.";
-            }
-        } else {
-            echo "error: Item not found.";
-        }
-    } else {
-        echo "error: Invalid item ID or quantity to subtract.";
-    }
-    exit();
-}
-
 // Handle adding new items and updating existing ones
 if($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['save_item'])) {
     $itemId = isset($_POST['item_id']) ? intval($_POST['item_id']) : 0;
     $itemName = isset($_POST['item_name']) ? mysqli_real_escape_string($conn, $_POST['item_name']) : '';
     $category = isset($_POST['category']) ? mysqli_real_escape_string($conn, $_POST['category']) : '';
-    $quantityToAdd = isset($_POST['quantity']) ? intval($_POST['quantity']) : 0;
+    $initialQuantity = isset($_POST['quantity']) ? intval($_POST['quantity']) : 0; // For new items
+    $addQuantity = isset($_POST['add_quantity']) ? intval($_POST['add_quantity']) : 0;
+    $subtractQuantity = isset($_POST['subtract_quantity']) ? intval($_POST['subtract_quantity']) : 0;
+    $currentQuantityHidden = isset($_POST['current_quantity_hidden']) ? intval($_POST['current_quantity_hidden']) : 0;
     $price = isset($_POST['price']) ? floatval($_POST['price']) : 0.00;
 
     if (empty($itemName)) {
@@ -59,71 +18,51 @@ if($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['save_item'])) {
     }
 
     if ($itemId > 0) {
-        // Updating an existing item (for name, category, price, adding stock)
-        $currentQuantitySql = "SELECT quantity FROM inventory WHERE item_id = ?";
-        $currentQuantityStmt = $conn->prepare($currentQuantitySql);
-        $currentQuantityStmt->bind_param("i", $itemId);
-        $currentQuantityStmt->execute();
-        $currentQuantityResult = $currentQuantityStmt->get_result();
-        if ($currentQuantityResult && $currentQuantityResult->num_rows > 0) {
-            $currentQuantity = $currentQuantityResult->fetch_assoc()['quantity'];
-            $currentQuantityStmt->close();
+        // Updating an existing item
+        $newQuantity = $currentQuantityHidden + $addQuantity - $subtractQuantity;
 
-            $newQuantity = $currentQuantity + $quantityToAdd;
-            $status = ($newQuantity > 10) ? 'In Stock' : (($newQuantity > 0) ? 'Low Stock' : 'Out of Stock');
-
-            $updateSql = "UPDATE inventory SET item_name = ?, category = ?, quantity = ?, price = ?, status = ? WHERE item_id = ?";
-            $updateStmt = $conn->prepare($updateSql);
-            if ($updateStmt) {
-                $updateStmt->bind_param("ssidsi", $itemName, $category, $newQuantity, $price, $status, $itemId);
-                if ($updateStmt->execute()) {
-                    echo "success"; // Item updated successfully
-                } else {
-                    echo "error: " . $updateStmt->error;
-                }
-                $updateStmt->close();
-            } else {
-                echo "error: " . $conn->error;
-            }
-        } else {
-            echo "error: Item not found.";
-        }
-    } else {
-        // Adding a new item - Check if it already exists
-        $checkSql = "SELECT item_id, quantity, price FROM inventory WHERE item_name = ? AND category = ?";
-        $checkStmt = $conn->prepare($checkSql);
-        $checkStmt->bind_param("ss", $itemName, $category);
-        $checkStmt->execute();
-        $checkResult = $checkStmt->get_result();
-
-        if ($checkResult->num_rows > 0) {
-            // Item exists, update the quantity (only adding here)
-            $row = $checkResult->fetch_assoc();
-            $existingQuantity = $row['quantity'];
-            $existingItemId = $row['item_id'];
-            $newQuantity = $existingQuantity + $quantityToAdd;
-            $newStatus = ($newQuantity > 10) ? 'In Stock' : (($newQuantity > 0) ? 'Low Stock' : 'Out of Stock');
-
-            $updateSql = "UPDATE inventory SET quantity = ?, status = ? WHERE item_id = ?";
-            $updateStmt = $conn->prepare($updateSql);
-            $updateStmt->bind_param("isi", $newQuantity, $newStatus, $existingItemId);
-
+        $updateSql = "UPDATE inventory SET item_name = ?, category = ?, quantity = ?, price = ? WHERE item_id = ?";
+        $updateStmt = $conn->prepare($updateSql);
+        if ($updateStmt) {
+            $updateStmt->bind_param("ssidi", $itemName, $category, $newQuantity, $price, $itemId);
             if ($updateStmt->execute()) {
-                echo "success"; // Quantity updated successfully
+                echo "success";
             } else {
                 echo "error: " . $updateStmt->error;
             }
             $updateStmt->close();
         } else {
-            // Item does not exist, insert a new one
-            $initialQuantity = $quantityToAdd;
-            $status = ($initialQuantity > 10) ? 'In Stock' : (($initialQuantity > 0) ? 'Low Stock' : 'Out of Stock');
-            $insertSql = "INSERT INTO inventory (item_name, category, quantity, price, status) VALUES (?, ?, ?, ?, ?)";
+            echo "error: " . $conn->error;
+        }
+    } else {
+        // Adding a new item - Check if item name already exists
+        $checkSql = "SELECT item_id, quantity FROM inventory WHERE item_name = ?";
+        $checkStmt = $conn->prepare($checkSql);
+        $checkStmt->bind_param("s", $itemName);
+        $checkStmt->execute();
+        $checkResult = $checkStmt->get_result();
+
+        if ($checkResult->num_rows > 0) {
+            // Item with the same name exists, update its quantity
+            $existingItem = $checkResult->fetch_assoc();
+            $newQuantity = $existingItem['quantity'] + $initialQuantity;
+            $updateExistingSql = "UPDATE inventory SET quantity = ? WHERE item_id = ?";
+            $updateExistingStmt = $conn->prepare($updateExistingSql);
+            $updateExistingStmt->bind_param("ii", $newQuantity, $existingItem['item_id']);
+            if ($updateExistingStmt->execute()) {
+                echo "success";
+            } else {
+                echo "error: " . $updateExistingStmt->error;
+            }
+            $updateExistingStmt->close();
+        } else {
+            // Item with the same name does not exist, insert as a new item
+            $insertSql = "INSERT INTO inventory (item_name, category, quantity, price) VALUES (?, ?, ?, ?)";
             $insertStmt = $conn->prepare($insertSql);
             if ($insertStmt) {
-                $insertStmt->bind_param("ssids", $itemName, $category, $initialQuantity, $price, $status);
+                $insertStmt->bind_param("ssdi", $itemName, $category, $initialQuantity, $price);
                 if ($insertStmt->execute()) {
-                    echo "success"; // Item added successfully
+                    echo "success";
                 } else {
                     echo "error: " . $insertStmt->error;
                 }
@@ -146,7 +85,7 @@ if($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['delete_item_id'])) {
         if ($deleteStmt) {
             $deleteStmt->bind_param("i", $deleteItemId);
             if ($deleteStmt->execute()) {
-                echo "success"; // Item deleted successfully
+                echo "success";
             } else {
                 echo "error: " . $deleteStmt->error;
             }
@@ -161,7 +100,7 @@ if($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['delete_item_id'])) {
 }
 
 // Fetch inventory data for display
-$sql = "SELECT item_id, item_name, category, quantity, price, status FROM inventory";
+$sql = "SELECT item_id, item_name, category, quantity, price FROM inventory";
 $result = $conn->query($sql);
 $inventoryItems = [];
 if ($result->num_rows > 0) {
@@ -348,6 +287,10 @@ if ($result->num_rows > 0) {
             color: #f44336;
         }
 
+        .action-link.subtract {
+            color: #007bff; /* Blue color for subtract */
+        }
+
         .action-link:hover {
             text-decoration: underline;
         }
@@ -359,7 +302,7 @@ if ($result->num_rows > 0) {
             left: 0;
             width: 100%;
             height: 100%;
-            background: rgba(0,0,0,0.5);
+            background: rgba(0, 123, 255, 0.3); /* Slightly translucent blue */
             justify-content: center;
             align-items: center;
             z-index: 1000;
@@ -417,21 +360,6 @@ if ($result->num_rows > 0) {
         .btn-danger {
             background: #f44336;
             color: white;
-        }
-
-        .status-in-stock {
-            color: #28a745;
-            font-weight: bold;
-        }
-
-        .status-low-stock {
-            color: #ffc107;
-            font-weight: bold;
-        }
-
-        .status-out-of-stock {
-            color: #dc3545;
-            font-weight: bold;
         }
 
         .logout-box {
@@ -492,8 +420,7 @@ if ($result->num_rows > 0) {
             width: 100%;
             padding: 8px;
             border: 1px solid #ddd;
-            border-radius:
-            4px;
+            border-radius: 4px;
         }
 
         .subtract-modal-actions {
@@ -503,6 +430,7 @@ if ($result->num_rows > 0) {
             margin-top: 20px;
         }
     </style>
+    <script src="https://code.jquery.com/jquery-3.6.0.min.js"></script>
 </head>
 <body>
     <header>
@@ -514,7 +442,7 @@ if ($result->num_rows > 0) {
         </div>
         <div class="user-profile" id="logout-btn">
             <span>Admin</span>
-            <i class="fas fa-user-circle" id="profile-icon"></i>
+            <img src="ad-icon.png" alt="Admin Icon">
             <div class="logout-box"id="logout-box">
                 <a href="login.php">Logout</a>
             </div>
@@ -524,7 +452,7 @@ if ($result->num_rows > 0) {
     <div class="sidebar" id="sidebar">
         <ul>
             <li><a href="admin-dashboard.php"><img src="d-icon.png"></i> Dashboard</a></li>
-            <li><a href="admin-orders.php"><img src="O-icon.png"><i class="Orders"></i> Orders</a></li>
+            <li><a href="admin-orders.php"><img src="O-icon.png"></i> Orders</a></li>
             <li><a href="admin-customers.php"><img src="c-icon.png"></i> Customers</a></li>
             <li class="active-menu"><a href="admin-inventory.php"><img src="i-icon.png"></i> Inventory</a></li>
             <li><a href="admin-Paymentsss.php"><img src="p-icon.png"></i> Payments</a></li>
@@ -548,13 +476,12 @@ if ($result->num_rows > 0) {
                     <th>Category</th>
                     <th>Quantity</th>
                     <th>Price</th>
-                    <th>Status</th>
                     <th>Action</th>
                 </tr>
             </thead>
             <tbody>
                 <?php if (empty($inventoryItems)): ?>
-                    <tr><td colspan='7'>No inventory items found</td></tr>
+                    <tr><td colspan='6'>No inventory items found</td></tr>
                 <?php else: ?>
                     <?php foreach ($inventoryItems as $item): ?>
                         <tr id="row-<?php echo htmlspecialchars($item['item_id']); ?>" data-item='<?php echo htmlspecialchars(json_encode($item)); ?>'>
@@ -563,11 +490,11 @@ if ($result->num_rows > 0) {
                             <td><?php echo htmlspecialchars($item["category"]); ?></td>
                             <td><?php echo htmlspecialchars($item["quantity"]); ?></td>
                             <td>₱<?php echo htmlspecialchars(number_format($item["price"], 2)); ?></td>
-                            <td><span class='status-<?php echo htmlspecialchars(strtolower(str_replace(' ', '-', $item["status"]))); ?>'><?php echo htmlspecialchars($item["status"]); ?></span></td>
                             <td>
-                                <span class='action-link' onclick='openEditItemModal(<?php echo htmlspecialchars($item["item_id"]); ?>)'>Edit</span>
-                                <span class='action-link delete' onclick='confirmDeleteItem(<?php echo htmlspecialchars($item["item_id"]); ?>, "<?php echo htmlspecialchars($item["item_name"]); ?>")'>Delete</span>
-                                <span class='action-link subtract' onclick='openSubtractModal(<?php echo htmlspecialchars($item["item_id"]); ?>, <?php echo htmlspecialchars($item["quantity"]); ?>, "<?php echo htmlspecialchars($item["item_name"]); ?>")'>Subtract</span>
+                                <div class="action-links">
+                                    <span class='action-link' onclick='openEditItemModal(<?php echo htmlspecialchars($item["item_id"]); ?>)'>Edit</span>
+                                    <span class='action-link delete' onclick='confirmDeleteItem(<?php echo htmlspecialchars($item["item_id"]); ?>, "<?php echo htmlspecialchars($item["item_name"]); ?>")'>Delete</span>
+                                </div>
                             </td>
                         </tr>
                     <?php endforeach; ?>
@@ -594,9 +521,24 @@ if ($result->num_rows > 0) {
                             <option value="Equipment">Equipment</option>
                         </select>
                     </div>
-                    <div class="form-group">
-                        <label for="quantity">Quantity</label>
-                        <input type="number" id="quantity" name="quantity" required>
+                    <div id="quantity-fields">
+                        <div class="form-group" id="initial-quantity-group">
+                            <label for="initial-quantity">Initial Quantity</label>
+                            <input type="number" id="initial-quantity" name="quantity" value="0" min="0">
+                        </div>
+                        <div class="form-group" id="adjust-quantity-group" style="display: none;">
+                            <label for="add-quantity">Add Quantity</label>
+                            <input type="number" id="add-quantity" name="add_quantity" value="0" min="0">
+                        </div>
+                        <div class="form-group" id="subtract-quantity-group" style="display: none;">
+                            <label for="subtract-quantity">Subtract Quantity</label>
+                            <input type="number" id="subtract-quantity" name="subtract_quantity" value="0" min="0">
+                        </div>
+                        <div class="form-group">
+                            <label for="current-quantity-display">Current Quantity</label>
+                            <input type="number" id="current-quantity-display" value="0" readonly>
+                            <input type="hidden" id="current-quantity" name="current_quantity_hidden" value="0">
+                        </div>
                     </div>
                     <div class="form-group">
                         <label for="price">Price (₱)</label>
@@ -621,95 +563,153 @@ if ($result->num_rows > 0) {
             </div>
         </div>
 
-        <div id="subtract-item-modal" class="modal">
-            <div class="modal-content">
-                <h2>Subtract Stock</h2>
-                <p>Subtract quantity for item: <span id="subtract-item-name"></span> (Current Stock: <span id="subtract-current-stock"></span>)</p>
-                <form id="subtract-item-form" action="admin-inventory.php" method="POST">
-                    <input type="hidden" name="subtract_item" value="true">
-                    <input type="hidden" id="subtract-item-id" name="item_id">
-                    <div class="form-group">
-                        <label for="quantity-to-subtract">Quantity to Subtract</label>
-                        <input type="number" id="quantity-to-subtract" name="quantity_to_subtract" min="1" required>
-                    </div>
-                    <div class="modal-actions">
-                        <button type="button" class="btn btn-secondary" onclick="closeModal('subtract-item-modal')">Cancel</button>
-                        <button type="submit" class="btn btn-primary">Subtract</button>
-                    </div>
-                </form>
-            </div>
-        </div>
-
-        <script src="https://code.jquery.com/jquery-3.6.0.min.js"></script>
         <script>
             let itemToDeleteId = null;
-            let currentSubtractItemId = null;
+            let addEditItemModal;
+            let modalTitle;
+            let itemIdInput;
+            let itemNameInput;
+            let categorySelect;
+            let initialQuantityGroup;
+            let initialQuantityInput;
+            let adjustQuantityGroup;
+            let addQuantityInput;
+            let subtractQuantityGroup;
+            let subtractQuantityInput;
+            let currentQuantityDisplayInput;
+            let currentQuantityHiddenInput;
+            let priceInput;
+            let deleteItemModal;
+            let deleteItemNameSpan;
 
-            document.getElementById('menu-btn').addEventListener('click', function() {
-                document.getElementById('sidebar').classList.toggle('active');
-                document.getElementById('mainContent').classList.toggle('shift');
-            });
+            document.addEventListener('DOMContentLoaded', function() {
+                addEditItemModal = document.getElementById('add-edit-item-modal');
+                modalTitle = document.getElementById('modal-title');
+                itemIdInput = document.getElementById('item-id');
+                itemNameInput = document.getElementById('item-name');
+                categorySelect = document.getElementById('category');
+                initialQuantityGroup = document.getElementById('initial-quantity-group');
+                initialQuantityInput = document.getElementById('initial-quantity');
+                adjustQuantityGroup = document.getElementById('adjust-quantity-group');
+                addQuantityInput = document.getElementById('add-quantity');
+                subtractQuantityGroup = document.getElementById('subtract-quantity-group');
+                subtractQuantityInput = document.getElementById('subtract-quantity');
+                currentQuantityDisplayInput = document.getElementById('current-quantity-display');
+                currentQuantityHiddenInput = document.getElementById('current-quantity');
+                priceInput = document.getElementById('price');
+                deleteItemModal = document.getElementById('delete-item-modal');
+                deleteItemNameSpan = document.getElementById('delete-item-name');
 
-            document.getElementById('logout-btn').addEventListener('click', function() {
-                document.getElementById('logout-box').style.display =
-                    document.getElementById('logout-box').style.display === 'block' ? 'none' : 'block';
+                document.getElementById('menu-btn').addEventListener('click', function() {
+                    document.getElementById('sidebar').classList.toggle('active');
+                    document.getElementById('mainContent').classList.toggle('shift');
+                });
+
+                document.getElementById('logout-btn').addEventListener('click', function() {
+                    document.getElementById('logout-box').style.display =
+                        document.getElementById('logout-box').style.display === 'block' ? 'none' : 'block';
+                });
+
+                if (priceInput) {
+                    priceInput.addEventListener('input', preventNegativeInput);
+                }
+                if (initialQuantityInput) {
+                    initialQuantityInput.addEventListener('input', preventNegativeInput);
+                }
+                if (addQuantityInput) {
+                    addQuantityInput.addEventListener('input', preventNegativeInput);
+                }
+                if (subtractQuantityInput) {
+                    subtractQuantityInput.addEventListener('input', preventNegativeInput);
+                }
+
+                document.getElementById('add-edit-item-form').addEventListener('submit', function(event) {
+                    event.preventDefault();
+
+                    const formData = new FormData(this);
+                    const itemId = parseInt(itemIdInput.value);
+                    let finalQuantity;
+
+                    if (itemId > 0) {
+                        const currentQuantity = parseInt(currentQuantityHiddenInput.value);
+                        const addQuantity = parseInt(addQuantityInput.value);
+                        const subtractQuantity = parseInt(subtractQuantityInput.value);
+                        finalQuantity = currentQuantity + addQuantity - subtractQuantity;
+                        formData.set('quantity', finalQuantity); // Update with the calculated final quantity
+                    } else {
+                        finalQuantity = parseInt(initialQuantityInput.value);
+                        formData.set('quantity', finalQuantity); // Use initial quantity for new items
+                    }
+
+                    fetch('admin-inventory.php', {
+                        method: 'POST',
+                        body: formData
+                    })
+                    .then(response => response.text())
+                    .then(data => {
+                        if (data === 'success') {
+                            alert(itemId === 0 ? 'Item added successfully!' : 'Item updated successfully!');
+                            closeModal('add-edit-item-modal');
+                            location.reload();
+                        } else {
+                            alert('Error saving item: ' + data);
+                        }
+                    })
+                    .catch(error => {
+                        console.error('Error saving item:', error);
+                        alert('An error occurred while saving the item.');
+                    });
+                });
             });
 
             function openAddItemModal() {
-                document.getElementById('modal-title').textContent = 'Add New Item';
-                document.getElementById('item-id').value = 0;
-                document.getElementById('item-name').value = '';
-                document.getElementById('category').value = '';
-                document.getElementById('quantity').value = '';
-                document.getElementById('price').value = '';
-                document.getElementById('add-edit-item-modal').style.display = 'flex';
+                modalTitle.textContent = 'Add New Item';
+                itemIdInput.value = 0;
+                itemNameInput.value = '';
+                categorySelect.value = '';
+                initialQuantityGroup.style.display = 'block';
+                adjustQuantityGroup.style.display = 'none';
+                subtractQuantityGroup.style.display = 'none';
+                currentQuantityDisplayInput.value = 0;
+                currentQuantityHiddenInput.value = 0;
+                priceInput.value = '';
+                addEditItemModal.style.display = 'flex';
             }
 
             function openEditItemModal(id) {
+                console.log("openEditItemModal called with ID:", id);
                 const row = document.getElementById(`row-${id}`);
                 if (row) {
                     const itemData = JSON.parse(row.dataset.item);
-                    document.getElementById('modal-title').textContent = 'Edit Item';
-                    document.getElementById('item-id').value = itemData.item_id;
-                    document.getElementById('item-name').value = itemData.item_name;
-                    document.getElementById('category').value = itemData.category;
-                    document.getElementById('quantity').value = itemData.quantity;
-                    document.getElementById('price').value = itemData.price;
-                    document.getElementById('add-edit-item-modal').style.display = 'flex';
+
+                    modalTitle.textContent = 'Edit Item';
+                    itemIdInput.value = itemData.item_id;
+                    itemNameInput.value = itemData.item_name;
+                    categorySelect.value = itemData.category;
+                    initialQuantityGroup.style.display = 'none';
+                    adjustQuantityGroup.style.display = 'block';
+                    subtractQuantityGroup.style.display = 'block';
+                    currentQuantityDisplayInput.value = itemData.quantity;
+                    currentQuantityHiddenInput.value = itemData.quantity;
+                    addQuantityInput.value = 0;
+                    subtractQuantityInput.value = 0;
+                    priceInput.value = itemData.price;
+                    addEditItemModal.style.display = 'flex';
                 } else {
                     alert('Item data not found.');
                 }
             }
 
-            document.getElementById('add-edit-item-form').addEventListener('submit', function(event) {
-                event.preventDefault();
-
-                const formData = new FormData(this);
-
-                fetch('admin-inventory.php', {
-                    method: 'POST',
-                    body: formData
-                })
-                .then(response => response.text())
-                .then(data => {
-                    if (data === 'success') {
-                        alert(document.getElementById('item-id').value === '0' ? 'Item added successfully!' : 'Item updated successfully!');
-                        closeModal('add-edit-item-modal');
-                        location.reload();
-                    } else {
-                        alert('Error saving item: ' + data);
-                    }
-                })
-                .catch(error => {
-                    console.error('Error saving item:', error);
-                    alert('An error occurred while saving the item.');
-                });
-            });
+            function preventNegativeInput(event) {
+                if (event.target.type === 'number' && event.target.value < 0) {
+                    event.target.value = 0; // Prevent negative input for all number fields related to quantity and price
+                }
+            }
 
             function confirmDeleteItem(id, itemName) {
                 itemToDeleteId = id;
-                document.getElementById('delete-item-name').textContent = itemName;
-                document.getElementById('delete-item-modal').style.display = 'flex';
+                deleteItemNameSpan.textContent = itemName;
+                deleteItemModal.style.display = 'flex';
             }
 
             function deleteItem() {
@@ -738,44 +738,6 @@ if ($result->num_rows > 0) {
                     .catch(error => console.error('Error:', error));
                 }
             }
-
-            function openSubtractModal(itemId, currentStock, itemName) {
-                currentSubtractItemId = itemId;
-                document.getElementById('subtract-item-name').textContent = itemName;
-                document.getElementById('subtract-current-stock').textContent = currentStock;
-                document.getElementById('subtract-item-id').value = itemId;
-                document.getElementById('quantity-to-subtract').value = ''; // Clear previous value
-                document.getElementById('subtract-item-modal').style.display = 'flex';
-            }
-
-            document.getElementById('subtract-item-form').addEventListener('submit', function(event) {
-                event.preventDefault();
-
-                if (currentSubtractItemId !== null) {
-                    const formData = new FormData(this);
-                    formData.append('item_id', currentSubtractItemId);
-                    formData.append('subtract_item', true); // Add a flag to identify the subtract request
-
-                    fetch('admin-inventory.php', {
-                        method: 'POST',
-                        body: formData
-                    })
-                    .then(response => response.text())
-                    .then(data => {
-                        if (data === 'success') {
-                            alert('Stock subtracted successfully!');
-                            closeModal('subtract-item-modal');
-                            location.reload(); // Reload to update the table
-                        } else {
-                            alert('Error subtracting stock: ' + data);
-                        }
-                    })
-                    .catch(error => {
-                        console.error('Error subtracting stock:', error);
-                        alert('An error occurred while subtracting stock.');
-                    });
-                }
-            });
 
             function closeModal(modalId) {
                 document.getElementById(modalId).style.display = 'none';
